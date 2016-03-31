@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="source">
+      <UniqueIdentifier>{8042b3ca-1eea-447c-bfff-5e25a7db59ed}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source\application">
+      <UniqueIdentifier>{bee51934-5247-4fa4-8283-86097f5abe8b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source\utility">
+      <UniqueIdentifier>{5ba3690e-ae45-40b3-ba51-b14550f3f216}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
