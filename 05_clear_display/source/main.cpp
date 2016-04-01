@@ -41,14 +41,17 @@ void initVulkan();
 void initVulkanInstance();
 void initVulkanPhysicalDevices();
 void initVulkanLogicalDevice();
-void initVulkanSwapChain();
-void initVulkanCommandPool();
 void initVulkanGraphicsQueue();
 void initVulkanDrawFence();
+void initVulkanCommandPool();
+void initVulkanSwapChain();
+void initBackBuffers();
 
 void beginVulkanCommandBuffer(uint32_t idx);
 void endVulkanCommandBuffer(uint32_t idx);
 void queueVulkanCommandBuffer();
+
+void clearBackBuffer();
 
 void procWindowThread();
 int32_t procWindowMessage(MSG& msg);
@@ -91,9 +94,13 @@ VkSurfaceKHR g_vkSurface = 0L;
 uint32_t g_uGraphicsQueueFamilyIndex = UINT32_MAX;
 VkSwapchainKHR g_vkSwapchain = 0L;
 uint32_t g_uSwapchainImageCount = 0;
+VkFormat g_vkBackBufferFormat;
 VkQueue g_vkGraphicsQueue = nullptr;
 uint32_t g_uGraphicsQueueIndex = 0;
 VkFence g_vkDrawFence = 0L;
+// 05
+VkImage g_vkBackBuffers[2];
+VkImageView g_vkBackBufferViews[2];
 
 // アプリケーション
 bool g_bIsAppRunning = true;
@@ -210,10 +217,11 @@ void initVulkan()
   initVulkanInstance();
   initVulkanPhysicalDevices();
   initVulkanLogicalDevice();
-  initVulkanSwapChain();
-  initVulkanCommandPool();
   initVulkanGraphicsQueue();
   initVulkanDrawFence();
+  initVulkanCommandPool();
+  initVulkanSwapChain();
+  initBackBuffers();
 }
 
 void initVulkanInstance()
@@ -345,6 +353,88 @@ void initVulkanLogicalDevice()
     &g_vkDevice);
 }
 
+void initVulkanGraphicsQueue()
+{
+  vkGetDeviceQueue(
+    g_vkDevice,
+    g_uGraphicsQueueFamilyIndex,
+    g_uGraphicsQueueIndex,
+    &g_vkGraphicsQueue);
+}
+
+void initVulkanDrawFence()
+{
+  VkFenceCreateInfo infoFence =
+  {
+    VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,  // type
+    nullptr,                              // next
+    0,                                    // create flag
+  };
+  VkResult result = vkCreateFence(
+    g_vkDevice,
+    &infoFence,
+    nullptr,
+    &g_vkDrawFence);
+  if(result != VK_SUCCESS)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot create fence", "", MB_OK);
+    exit(-1);
+  }
+}
+
+void initVulkanCommandPool()
+{
+  if(g_uPhysDevQueueFamilyPropertyCount <= 0)
+  {
+    // エラー
+    MessageBox(g_hWnd, "queue family not found", "", MB_OK);
+    exit(-1);
+  }
+
+  // コマンドバッファプール作成
+  uint32_t uQueueFamilyIndex = 0;
+  VkCommandPoolCreateInfo infoCmdPool =
+  {
+    VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,       // type
+    nullptr,                                          // next
+    VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,  // flags このふらぐよくわからん。何故いきなりせっていするようにした？
+    uQueueFamilyIndex,                                // queue family index
+  };
+  VkResult result =
+    vkCreateCommandPool(
+      g_vkDevice,
+      &infoCmdPool,
+      nullptr,
+      &g_vkCmdPool);
+  if(result != VK_SUCCESS)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot create command pool", "", MB_OK);
+    exit(-1);
+  }
+
+  // コマンドバッファ確保
+  VkCommandBufferAllocateInfo infoCmdBufAlloc =
+  {
+    VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, // type
+    nullptr,                                        // next
+    g_vkCmdPool,                                    // command pool
+    VK_COMMAND_BUFFER_LEVEL_PRIMARY,                // command buffer level
+    MAX_COMMAND_BUFFER_COUNT,                       // command buffer count
+  };
+  result = vkAllocateCommandBuffers(
+    g_vkDevice,
+    &infoCmdBufAlloc,
+    g_vkCmdBufs);
+  if(result != VK_SUCCESS)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot allocate command buffers", "", MB_OK);
+    exit(-1);
+  }
+}
+
 void initVulkanSwapChain()
 {
   VkResult result = VK_INCOMPLETE;
@@ -434,7 +524,7 @@ void initVulkanSwapChain()
     exit(-1);
   }
   // フォーマットを取得
-  VkFormat formatSwapChain = pSurfFormats[0].format;
+  g_vkBackBufferFormat = pSurfFormats[0].format;
 
   // サーフェスの設定可能なサイズを取得
   VkSurfaceCapabilitiesKHR surfCapabilities;
@@ -527,7 +617,7 @@ void initVulkanSwapChain()
     0,                                            // flags
     g_vkSurface,                                  // surface
     uDesiredNumberOfSwapChainImages,              // swapchain count
-    formatSwapChain,                              // image format
+    g_vkBackBufferFormat,                         // image format
     VK_COLORSPACE_SRGB_NONLINEAR_KHR,             // color space
     swapChainExtent,                              // image extent (横幅縦幅)
     1,                                            // image array layers
@@ -555,6 +645,15 @@ void initVulkanSwapChain()
     exit(-1);
   }
 
+  delete [] presentModes;
+  delete [] pSurfFormats;
+}
+
+void initBackBuffers()
+{
+  VkResult result;
+
+  // バックバッファを作成する
   // スワップチェインに使用している画像数取得
   result = vkGetSwapchainImagesKHR(
     g_vkDevice,
@@ -567,91 +666,62 @@ void initVulkanSwapChain()
     MessageBox(g_hWnd, "cannot get swapchain image count", "", MB_OK);
     exit(-1);
   }
-
-  delete [] presentModes;
-  delete [] pSurfFormats;
-}
-
-void initVulkanCommandPool()
-{
-  if(g_uPhysDevQueueFamilyPropertyCount <= 0)
+  else if(2 != g_uSwapchainImageCount)
   {
     // エラー
-    MessageBox(g_hWnd, "queue family not found", "", MB_OK);
+    MessageBox(g_hWnd, "unexpected swapchain image count", "", MB_OK);
     exit(-1);
   }
 
-  // コマンドバッファプール作成
-  uint32_t uQueueFamilyIndex = 0;
-  VkCommandPoolCreateInfo infoCmdPool =
-  {
-    VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,       // type
-    nullptr,                                          // next
-    VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,  // flags このふらぐよくわからん。何故いきなりせっていするようにした？
-    uQueueFamilyIndex,                                // queue family index
-  };
-  VkResult result =
-    vkCreateCommandPool(
-      g_vkDevice,
-      &infoCmdPool,
-      nullptr,
-      &g_vkCmdPool);
+  result = vkGetSwapchainImagesKHR(
+    g_vkDevice,
+    g_vkSwapchain,
+    &g_uSwapchainImageCount,
+    g_vkBackBuffers);
   if(result != VK_SUCCESS)
   {
     // エラー
-    MessageBox(g_hWnd, "cannot create command pool", "", MB_OK);
+    MessageBox(g_hWnd, "cannot get swapchain images", "", MB_OK);
     exit(-1);
   }
 
-  // コマンドバッファ確保
-  VkCommandBufferAllocateInfo infoCmdBufAlloc =
-  {
-    VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, // type
-    nullptr,                                        // next
-    g_vkCmdPool,                                    // command pool
-    VK_COMMAND_BUFFER_LEVEL_PRIMARY,                // command buffer level
-    MAX_COMMAND_BUFFER_COUNT,                       // command buffer count
-  };
-  result = vkAllocateCommandBuffers(
-    g_vkDevice,
-    &infoCmdBufAlloc,
-    g_vkCmdBufs);
-  if(result != VK_SUCCESS)
-  {
-    // エラー
-    MessageBox(g_hWnd, "cannot allocate command buffers", "", MB_OK);
-    exit(-1);
-  }
-}
+  VkImageViewCreateInfo arrInfo[2];
 
-void initVulkanGraphicsQueue()
-{
-  vkGetDeviceQueue(
-    g_vkDevice,
-    g_uGraphicsQueueFamilyIndex,
-    g_uGraphicsQueueIndex,
-    &g_vkGraphicsQueue);
-}
-
-void initVulkanDrawFence()
-{
-  VkFenceCreateInfo infoFence =
+  // ビューを作成
+  for(uint32_t i = 0; i < g_uSwapchainImageCount; i++)
   {
-    VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,  // type
-    nullptr,                              // next
-    0,                                    // create flag
-  };
-  VkResult result = vkCreateFence(
-    g_vkDevice,
-    &infoFence,
-    nullptr,
-    &g_vkDrawFence);
-  if(result != VK_SUCCESS)
-  {
-    // エラー
-    MessageBox(g_hWnd, "cannot create fence", "", MB_OK);
-    exit(-1);
+    VkComponentMapping components;
+    components.r = VK_COMPONENT_SWIZZLE_R;
+    components.g = VK_COMPONENT_SWIZZLE_G;
+    components.b = VK_COMPONENT_SWIZZLE_B;
+    components.a = VK_COMPONENT_SWIZZLE_A;
+    VkImageSubresourceRange subresourceRange;
+    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresourceRange.baseMipLevel = 0;
+    subresourceRange.levelCount = 1;
+    subresourceRange.baseArrayLayer = 0;
+    subresourceRange.layerCount = 1;
+    VkImageViewCreateInfo infoIv =
+    {
+      VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, // type
+      nullptr,                                  // next
+      0,                                        // flags
+      g_vkBackBuffers[i],                       // image
+      VK_IMAGE_VIEW_TYPE_2D,                    // image view type
+      g_vkBackBufferFormat,                     // image format
+      components,                               // color components
+      subresourceRange,                         // subresource range
+    };
+    arrInfo[i] = infoIv;
   }
+
+  beginVulkanCommandBuffer(0);
+  for(uint32_t i = 0; i < g_uSwapchainImageCount; i++)
+  {
+    // Memorry barrier
+    // create view
+  }
+  endVulkanCommandBuffer(0);
 }
 
 void beginVulkanCommandBuffer(uint32_t idx)
@@ -826,6 +896,8 @@ void uninitVulkan()
       nullptr);
     g_vkCmdPool = 0L;
   }
+
+  // 05
 
   // 04
   if(g_vkSwapchain)
