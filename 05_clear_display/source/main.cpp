@@ -51,7 +51,7 @@ void beginVulkanCommandBuffer(uint32_t idx);
 void endVulkanCommandBuffer(uint32_t idx);
 void queueVulkanCommandBuffer();
 
-void clearBackBuffer();
+void cmdSetImageMemoryBarrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout);
 
 void procWindowThread();
 int32_t procWindowMessage(MSG& msg);
@@ -217,10 +217,10 @@ void initVulkan()
   initVulkanInstance();
   initVulkanPhysicalDevices();
   initVulkanLogicalDevice();
-  initVulkanGraphicsQueue();
   initVulkanDrawFence();
   initVulkanCommandPool();
   initVulkanSwapChain();
+  initVulkanGraphicsQueue();
   initBackBuffers();
 }
 
@@ -351,15 +351,6 @@ void initVulkanLogicalDevice()
     &infoDevCreate,
     nullptr,
     &g_vkDevice);
-}
-
-void initVulkanGraphicsQueue()
-{
-  vkGetDeviceQueue(
-    g_vkDevice,
-    g_uGraphicsQueueFamilyIndex,
-    g_uGraphicsQueueIndex,
-    &g_vkGraphicsQueue);
 }
 
 void initVulkanDrawFence()
@@ -649,6 +640,15 @@ void initVulkanSwapChain()
   delete [] pSurfFormats;
 }
 
+void initVulkanGraphicsQueue()
+{
+  vkGetDeviceQueue(
+    g_vkDevice,
+    g_uGraphicsQueueFamilyIndex,
+    g_uGraphicsQueueIndex,
+    &g_vkGraphicsQueue);
+}
+
 void initBackBuffers()
 {
   VkResult result;
@@ -719,9 +719,21 @@ void initBackBuffers()
   for(uint32_t i = 0; i < g_uSwapchainImageCount; i++)
   {
     // Memorry barrier
+    cmdSetImageMemoryBarrier(
+      g_vkCmdBufs[0],
+      g_vkBackBuffers[i],
+      arrInfo[i].subresourceRange.aspectMask, // 色情報であることには変わりない
+      VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     // create view
+    result = vkCreateImageView(
+      g_vkDevice,
+      &arrInfo[i],
+      nullptr,
+      &g_vkBackBufferViews[i]);
   }
   endVulkanCommandBuffer(0);
+  queueVulkanCommandBuffer();
 }
 
 void beginVulkanCommandBuffer(uint32_t idx)
@@ -797,6 +809,90 @@ void queueVulkanCommandBuffer()
   }
 }
 
+void cmdSetImageMemoryBarrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout)
+{
+  VkImageSubresourceRange subresourceRange =
+  {
+    aspectMask, // aspect mask
+    0,          // base mip level
+    1,          // level count
+    0,          // base array layer
+    1           // layer count
+  };
+  VkImageMemoryBarrier barrierImage =
+  {
+    VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, // type
+    nullptr,                                // next
+    0,                                      // src access mask
+    0,                                      // dst access mask
+    oldImageLayout,                         // old image layout
+    newImageLayout,                         // new image layout
+    0,                                      // src queue family index
+    0,                                      // dst queue family index
+    img,                                    // アクセスオーダーを変えたくない画像への参照
+    subresourceRange                        // subresource range
+  };
+
+  // アクセスフラグを設定
+  // このへんはFramebufferがテクスチャで使われるときとかに
+  // GPUで書き込む前に、テクスチャで使うな～
+  // って感じの命令
+  // optimal : 最適(最適化についての設定か？)
+  switch(oldImageLayout)
+  {
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+  {
+    barrierImage.srcAccessMask |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  }
+  break;
+  }
+
+  switch(newImageLayout)
+  {
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+  {
+    barrierImage.dstAccessMask |= VK_ACCESS_MEMORY_READ_BIT;
+  }
+  break;
+
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+  {
+    barrierImage.srcAccessMask =
+      VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrierImage.dstAccessMask =
+      VK_ACCESS_SHADER_READ_BIT;
+  }
+  break;
+
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+  {
+    barrierImage.dstAccessMask =
+      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+  }
+  break;
+
+  case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+  {
+    barrierImage.dstAccessMask =
+      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+  }
+  break;
+
+  }
+
+  // とりあえずパイプラインの最初で全部済ますようにしてしまう
+  VkPipelineStageFlags srcStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+  VkPipelineStageFlags dstStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+  vkCmdPipelineBarrier(
+    cmd,
+    srcStages, dstStages,
+    0,  // dependency flags
+    0, nullptr, // 汎用メモリバリア
+    0, nullptr, // バッファメモリバリア
+    1, &barrierImage);
+}
+
 void procWindowThread()
 {
   initWindow();
@@ -855,6 +951,19 @@ void uninitWindow()
 
 void uninitVulkan()
 {
+  // 05
+  for(uint32_t i = 0; i < 2; i++)
+  {
+    if(g_vkBackBufferViews[i])
+    {
+      vkDestroyImageView(
+        g_vkDevice,
+        g_vkBackBufferViews[i],
+        nullptr);
+      g_vkBackBufferViews[i] = 0L;
+    }
+  }
+
   // 04
   if(g_vkDrawFence)
   {
@@ -896,8 +1005,6 @@ void uninitVulkan()
       nullptr);
     g_vkCmdPool = 0L;
   }
-
-  // 05
 
   // 04
   if(g_vkSwapchain)
