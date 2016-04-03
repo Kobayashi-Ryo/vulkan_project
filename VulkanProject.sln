@@ -15,7 +15,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "03_command_buffer", "03_com
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "04_swap_chain", "04_swap_chain\04_swap_chain.vcxproj", "{E4D65E77-4CBE-44DE-B6C5-A5384D631242}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "05_clear_display", "05_clear_display\05_clear_display.vcxproj", "{D1270591-403C-40DD-A02E-54F1FFD2590D}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "05_backbuffer", "05_backbuffer\05_backbuffer.vcxproj", "{D1270591-403C-40DD-A02E-54F1FFD2590D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
