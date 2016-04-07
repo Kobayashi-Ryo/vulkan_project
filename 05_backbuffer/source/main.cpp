@@ -94,13 +94,13 @@ VkSurfaceKHR g_vkSurface = 0L;
 uint32_t g_uGraphicsQueueFamilyIndex = UINT32_MAX;
 VkSwapchainKHR g_vkSwapchain = 0L;
 uint32_t g_uSwapchainImageCount = 0;
-VkFormat g_vkBackBufferFormat;
+VkFormat g_vkSwapChainImageFormat;
 VkQueue g_vkGraphicsQueue = nullptr;
 uint32_t g_uGraphicsQueueIndex = 0;
 VkFence g_vkDrawFence = 0L;
 // 05
-VkImage g_vkBackBuffers[2];
-VkImageView g_vkBackBufferViews[2];
+VkImage g_vkSwapChainImages[2];
+VkImageView g_vkSwapChainImageViews[2];
 
 // アプリケーション
 bool g_bIsAppRunning = true;
@@ -515,7 +515,7 @@ void initVulkanSwapChain()
     exit(-1);
   }
   // フォーマットを取得
-  g_vkBackBufferFormat = pSurfFormats[0].format;
+  g_vkSwapChainImageFormat = pSurfFormats[0].format;
 
   // サーフェスの設定可能なサイズを取得
   VkSurfaceCapabilitiesKHR surfCapabilities;
@@ -608,7 +608,7 @@ void initVulkanSwapChain()
     0,                                            // flags
     g_vkSurface,                                  // surface
     uDesiredNumberOfSwapChainImages,              // swapchain count
-    g_vkBackBufferFormat,                         // image format
+    g_vkSwapChainImageFormat,                         // image format
     VK_COLORSPACE_SRGB_NONLINEAR_KHR,             // color space
     swapChainExtent,                              // image extent (横幅縦幅)
     1,                                            // image array layers
@@ -677,7 +677,7 @@ void initBackBuffers()
     g_vkDevice,
     g_vkSwapchain,
     &g_uSwapchainImageCount,
-    g_vkBackBuffers);
+    g_vkSwapChainImages);
   if(result != VK_SUCCESS)
   {
     // エラー
@@ -706,9 +706,9 @@ void initBackBuffers()
       VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, // type
       nullptr,                                  // next
       0,                                        // flags
-      g_vkBackBuffers[i],                       // image
+      g_vkSwapChainImages[i],                       // image
       VK_IMAGE_VIEW_TYPE_2D,                    // image view type
-      g_vkBackBufferFormat,                     // image format
+      g_vkSwapChainImageFormat,                     // image format
       components,                               // color components
       subresourceRange,                         // subresource range
     };
@@ -721,7 +721,7 @@ void initBackBuffers()
     // Memorry barrier
     cmdSetImageMemoryBarrier(
       g_vkCmdBufs[0],
-      g_vkBackBuffers[i],
+      g_vkSwapChainImages[i],
       arrInfo[i].subresourceRange.aspectMask, // 色情報であることには変わりない
       VK_IMAGE_LAYOUT_UNDEFINED,
       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -730,7 +730,7 @@ void initBackBuffers()
       g_vkDevice,
       &arrInfo[i],
       nullptr,
-      &g_vkBackBufferViews[i]);
+      &g_vkSwapChainImageViews[i]);
   }
   endVulkanCommandBuffer(0);
   queueVulkanCommandBuffer();
@@ -954,13 +954,13 @@ void uninitVulkan()
   // 05
   for(uint32_t i = 0; i < 2; i++)
   {
-    if(g_vkBackBufferViews[i])
+    if(g_vkSwapChainImageViews[i])
     {
       vkDestroyImageView(
         g_vkDevice,
-        g_vkBackBufferViews[i],
+        g_vkSwapChainImageViews[i],
         nullptr);
-      g_vkBackBufferViews[i] = 0L;
+      g_vkSwapChainImageViews[i] = 0L;
     }
   }
 
