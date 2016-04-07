@@ -32,7 +32,7 @@ const int32_t GAME_WINDOW = (WS_OVERLAPPEDWINDOW ^ (WS_THICKFRAME | WS_MAXIMIZEB
 const uint32_t MAX_GPU_COUNT = 4;
 const uint32_t MAX_QUEUE_FAMILY_COUNT = 4;
 const uint32_t MAX_COMMAND_BUFFER_COUNT = 2;
-const uint32_t FENCE_TIMEOUT = 1000000;
+const uint32_t FENCE_TIMEOUT = 1000000; // 1ミリ秒
 
 //*****************************************************************************
 // プロトタイプ定義
@@ -53,7 +53,8 @@ void beginVulkanCommandBuffer(uint32_t idx);
 void endVulkanCommandBuffer(uint32_t idx);
 void queueVulkanCommandBuffer();
 
-void cmdSetImageMemoryBarrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout);
+void cmdSetImageLayout(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout);
+bool setupMemoryTypeFromProperties(uint32_t uTypeBits, VkFlags requirementsMask, uint32_t* pTypeIndex);
 
 void procWindowThread();
 int32_t procWindowMessage(MSG& msg);
@@ -106,6 +107,7 @@ VkImageView g_vkSwapChainImageViews[2];
 // 06
 VkFormat g_vkDepthFormat;
 VkImage g_vkDepthStencilBuffer;
+VkDeviceMemory g_vkDepthStencilBufferMemory;
 VkImageView g_vkDepthStencilBufferView;
 
 // アプリケーション
@@ -726,7 +728,7 @@ void initVulkanBackBuffers()
   for(uint32_t i = 0; i < g_uSwapchainImageCount; i++)
   {
     // Memorry barrier
-    cmdSetImageMemoryBarrier(
+    cmdSetImageLayout(
       g_vkCmdBufs[0],
       g_vkSwapChainImages[i],
       arrInfo[i].subresourceRange.aspectMask, // 色情報であることには変わりない
@@ -816,7 +818,89 @@ void initVulkanDepthStencilBuffer()
   infoIv.subresourceRange.baseArrayLayer = 0;
   infoIv.subresourceRange.layerCount = 1;
 
+  // まず深度バッファハンドルを生成
+  VkResult result = vkCreateImage(
+    g_vkDevice,
+    &infoImg,
+    nullptr,
+    &g_vkDepthStencilBuffer);
+  if(VK_SUCCESS != result)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot create depth buffer image", "", MB_OK);
+    exit(-1);
+  }
 
+  // 必要メモリ量取得
+  VkMemoryRequirements memReq;
+  vkGetImageMemoryRequirements(
+    g_vkDevice,
+    g_vkDepthStencilBuffer,
+    &memReq);
+
+  // 必要メモリサイズをアロケーション情報に設定
+  infoMemAlloc.allocationSize = memReq.size;
+  bool bPassed = setupMemoryTypeFromProperties(
+    memReq.memoryTypeBits,
+    0,  // 要求フラグ無し
+    &infoMemAlloc.memoryTypeIndex);
+  if(!bPassed)
+  {
+    // エラー
+    MessageBox(g_hWnd, "compatible memory type not found", "", MB_OK);
+    exit(-1);
+  }
+
+  // メモリの確保
+  result = vkAllocateMemory(
+    g_vkDevice,
+    &infoMemAlloc,
+    nullptr,
+    &g_vkDepthStencilBufferMemory);
+  if(VK_SUCCESS != result)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot allocate depth buffer memory", "", MB_OK);
+    exit(-1);
+  }
+
+  // ImageにMemoryをバインド
+  result = vkBindImageMemory(
+    g_vkDevice,
+    g_vkDepthStencilBuffer,
+    g_vkDepthStencilBufferMemory,
+    0); // VkDeviceSize
+  if(VK_SUCCESS != result)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot bind memory to depth buffer", "", MB_OK);
+    exit(-1);
+  }
+  
+  beginVulkanCommandBuffer(0);
+  // 深度バッファに最適になるようにImageLayoutを変更
+  cmdSetImageLayout(
+    g_vkCmdBufs[0],
+    g_vkDepthStencilBuffer,
+    VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+    VK_IMAGE_LAYOUT_UNDEFINED,
+    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+  endVulkanCommandBuffer(0);
+  queueVulkanCommandBuffer();
+
+  // ImageView生成
+  infoIv.image = g_vkDepthStencilBuffer;
+  result = vkCreateImageView(
+    g_vkDevice,
+    &infoIv,
+    nullptr,
+    &g_vkDepthStencilBufferView);
+  if(VK_SUCCESS != result)
+  {
+    // エラー
+    MessageBox(g_hWnd, "cannot create depth buffer view", "", MB_OK);
+    exit(-1);
+  }
 }
 
 void beginVulkanCommandBuffer(uint32_t idx)
@@ -853,6 +937,15 @@ void endVulkanCommandBuffer(uint32_t idx)
 
 void queueVulkanCommandBuffer()
 {
+  // fenceをリセットする
+  // これはQueueにsubmitする直前でやる
+  // これをやらないと、キューに入れたコマンドバッファが
+  // 全部実行されないうちにループがブン回る
+  vkResetFences(
+    g_vkDevice,
+    1,
+    &g_vkDrawFence);
+
   // queueにバッファを送出(やっとか…)
   VkPipelineStageFlags pipelineStageFlags =
     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT; // このフラグにすると、グラフィックスパイプラインのケツにくるみたい
@@ -881,6 +974,7 @@ void queueVulkanCommandBuffer()
     exit(-1);
   }
 
+  // 指定した時間(ナノ秒)待つ
   while((result = vkWaitForFences(
     g_vkDevice, 1, &g_vkDrawFence, VK_TRUE, FENCE_TIMEOUT)) == VK_TIMEOUT);
 
@@ -892,7 +986,7 @@ void queueVulkanCommandBuffer()
   }
 }
 
-void cmdSetImageMemoryBarrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout)
+void cmdSetImageLayout(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout, VkImageLayout newImageLayout)
 {
   VkImageSubresourceRange subresourceRange =
   {
@@ -976,6 +1070,28 @@ void cmdSetImageMemoryBarrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFla
     1, &barrierImage);
 }
 
+bool setupMemoryTypeFromProperties(uint32_t uTypeBits, VkFlags requirementsMask, uint32_t* pTypeIndex)
+{
+  // 最初のbitフラグと一致したメモリタイプを設定
+  for(uint32_t i = 0; i < 32; i++)
+  {
+    if(!!(uTypeBits & 1))
+    {
+      // このタイプが使用可能
+      // メモリプロパティ的に問題が無いか検査
+      if((g_vkPhysDevMemoryProps.memoryTypes[i].propertyFlags & requirementsMask) ==
+        requirementsMask)
+      {
+        *pTypeIndex = i;
+        return true;
+      }
+    }
+    uTypeBits >>= 1;
+  }
+
+  return false;
+}
+
 void procWindowThread()
 {
   initWindow();
@@ -1034,6 +1150,34 @@ void uninitWindow()
 
 void uninitVulkan()
 {
+  // 06
+  // DepthBufferImageView開放
+  if(g_vkDepthStencilBufferView)
+  {
+    vkDestroyImageView(
+      g_vkDevice,
+      g_vkDepthStencilBufferView,
+      nullptr);
+    g_vkDepthStencilBufferView = 0L;
+  }
+  // DepthBufferImageのメモリ開放
+  if(g_vkDepthStencilBufferMemory)
+  {
+    vkFreeMemory(
+      g_vkDevice,
+      g_vkDepthStencilBufferMemory,
+      nullptr);
+    g_vkDepthStencilBufferMemory = 0L;
+  }
+  // DepthBufferImage開放
+  if(g_vkDepthStencilBuffer)
+  {
+    vkDestroyImage(
+      g_vkDevice,
+      g_vkDepthStencilBuffer,
+      nullptr);
+    g_vkDepthStencilBuffer = 0L;
+  }
   // 05
   for(uint32_t i = 0; i < 2; i++)
   {
